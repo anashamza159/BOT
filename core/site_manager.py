@@ -1,0 +1,50 @@
+import importlib
+import inspect
+from pathlib import Path
+from typing import Dict, Any, List, Type, Optional  # أضف Optional هنا
+from core.base_checker import BaseChecker
+import config
+
+class SiteManager:
+    """Manager for dynamically loading site checkers"""
+    
+    def __init__(self):
+        self.checkers: Dict[str, Type[BaseChecker]] = {}
+        self.load_all_sites()
+    
+    def load_all_sites(self):
+        """Load all site checkers from sites directory"""
+        sites_dir = config.SITES_DIR
+        
+        for file_path in sites_dir.glob("*.py"):
+            if file_path.name == "__init__.py" or file_path.name == "template.py":
+                continue
+            
+            module_name = f"sites.{file_path.stem}"
+            try:
+                module = importlib.import_module(module_name)
+                
+                # Find all BaseChecker subclasses
+                for name, obj in inspect.getmembers(module):
+                    if (inspect.isclass(obj) and 
+                        issubclass(obj, BaseChecker) and 
+                        obj != BaseChecker):
+                        
+                        checker_name = name.replace('Checker', '').lower()
+                        self.checkers[checker_name] = obj
+                        print(f"✅ Loaded checker: {checker_name}")
+                        
+            except Exception as e:
+                print(f"❌ Error loading {file_path.name}: {e}")
+    
+    def add_site(self, site_name: str, checker_class: Type[BaseChecker]):
+        """Add a new site checker dynamically"""
+        self.checkers[site_name.lower()] = checker_class
+    
+    def get_checker(self, site_name: str) -> Optional[Type[BaseChecker]]:
+        """Get checker class by site name"""
+        return self.checkers.get(site_name.lower())
+    
+    def list_sites(self) -> List[str]:
+        """List all available sites"""
+        return list(self.checkers.keys())
