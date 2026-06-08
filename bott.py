@@ -13,7 +13,7 @@ BOT_TOKEN = "8606519407:AAG6QxZbjypnFwkEuizU3yb5JDzmPCPWVoc"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # عدد الخيوط الثابت للفحص عبر التلجرام (يمكنك تعديله حسب رغبتك)
-MAX_WORKERS = 2
+MAX_WORKERS = 1
 
 # URLs الـ API
 LOGIN_URL = "https://m.donbet.com/api/profile/login"
