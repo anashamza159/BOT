@@ -12,7 +12,7 @@ BOT_TOKEN = "8606519407:AAG6QxZbjypnFwkEuizU3yb5JDzmPCPWVoc"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # عدد الخيوط (Threads) للفحص
-MAX_WORKERS = 4
+MAX_WORKERS = 1
 
 # قاموس لتخزين بيانات المستخدمين الحالية
 user_sessions = {}
